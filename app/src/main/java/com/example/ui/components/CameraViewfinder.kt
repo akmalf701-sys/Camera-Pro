@@ -40,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,8 +81,64 @@ fun CameraViewfinder(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var previewView: PreviewView? by remember { mutableStateOf(null) }
-    var cameraProvider: ProcessCameraProvider? by remember { mutableStateOf(null) }
+    var previewView by remember { mutableStateOf<PreviewView?>(null) }
+    var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+
+    // Retrieve ProcessCameraProvider safely
+    LaunchedEffect(context) {
+        try {
+            val future = ProcessCameraProvider.getInstance(context)
+            cameraProvider = future.get()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // Safely unbind all when disposing
+    DisposableEffect(lifecycleOwner, cameraProvider) {
+        onDispose {
+            try {
+                cameraProvider?.unbindAll()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    // Bind camera lifecycle reactively
+    LaunchedEffect(cameraProvider, previewView, state.isBackCamera, hasCameraPermission) {
+        val provider = cameraProvider ?: return@LaunchedEffect
+        val pView = previewView ?: return@LaunchedEffect
+        if (!hasCameraPermission) return@LaunchedEffect
+
+        try {
+            provider.unbindAll()
+
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(pView.surfaceProvider)
+            }
+
+            val imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                .build()
+            onBindImageCapture(imageCapture)
+
+            val cameraSelector = if (state.isBackCamera) {
+                CameraSelector.DEFAULT_BACK_CAMERA
+            } else {
+                CameraSelector.DEFAULT_FRONT_CAMERA
+            }
+
+            provider.bindToLifecycle(
+                lifecycleOwner,
+                cameraSelector,
+                preview,
+                imageCapture
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     // Fallback sample bitmap for preview overlay or emulator simulation
     val sampleBitmap = remember { ImageProcessor.createSampleSceneBitmap(1080, 1440) }
@@ -126,41 +183,13 @@ fun CameraViewfinder(
                                 ViewGroup.LayoutParams.MATCH_PARENT
                             )
                             scaleType = PreviewView.ScaleType.FILL_CENTER
+                            // Use COMPATIBLE (TextureView) to prevent BufferQueue abandonment in Compose/emulator
+                            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                             previewView = this
-
-                            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                            cameraProviderFuture.addListener({
-                                val provider = cameraProviderFuture.get()
-                                cameraProvider = provider
-
-                                val preview = Preview.Builder().build().also {
-                                    it.setSurfaceProvider(surfaceProvider)
-                                }
-
-                                val imageCapture = ImageCapture.Builder()
-                                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                                    .build()
-                                onBindImageCapture(imageCapture)
-
-                                val cameraSelector = if (state.isBackCamera) {
-                                    CameraSelector.DEFAULT_BACK_CAMERA
-                                } else {
-                                    CameraSelector.DEFAULT_FRONT_CAMERA
-                                }
-
-                                try {
-                                    provider.unbindAll()
-                                    provider.bindToLifecycle(
-                                        lifecycleOwner,
-                                        cameraSelector,
-                                        preview,
-                                        imageCapture
-                                    )
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
-                                }
-                            }, ContextCompat.getMainExecutor(ctx))
                         }
+                    },
+                    update = { view ->
+                        previewView = view
                     },
                     modifier = Modifier
                         .fillMaxSize()
