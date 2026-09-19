@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Kamera</string>
+    <string name="photo_mode">FOTO</string>
+    <string name="video_mode">VIDEO</string>
+    <string name="pro_mode">PRO</string>
+    <string name="night_mode">MALAM</string>
+    <string name="gallery_title">Galeri Media</string>
+    <string name="edit_photo">Edit Foto</string>
+    <string name="cloud_sync">Sinkronisasi Awan</string>
+    <string name="export_options">Opsi Ekspor</string>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "Kamera",
+  "description": "Aplikasi kamera profesional dengan filter real-time, kontrol manual, stabilizer, mode malam otomatis, editor foto, sinkronisasi cloud, dan ekspor resolusi tinggi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
