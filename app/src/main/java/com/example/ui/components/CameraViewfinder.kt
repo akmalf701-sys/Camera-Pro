@@ -3,6 +3,7 @@ package com.example.ui.components
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.view.ViewGroup
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
@@ -12,6 +13,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -42,20 +44,25 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -83,6 +90,7 @@ fun CameraViewfinder(
     val lifecycleOwner = LocalLifecycleOwner.current
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
     var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    var activeCamera by remember { mutableStateOf<Camera?>(null) }
 
     // Retrieve ProcessCameraProvider safely
     LaunchedEffect(context) {
@@ -129,12 +137,27 @@ fun CameraViewfinder(
                 CameraSelector.DEFAULT_FRONT_CAMERA
             }
 
-            provider.bindToLifecycle(
+            val camera = provider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
                 preview,
                 imageCapture
             )
+            activeCamera = camera
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // Reactively apply zoom to hardware CameraControl
+    LaunchedEffect(state.zoomRatio, activeCamera) {
+        val cam = activeCamera ?: return@LaunchedEffect
+        try {
+            val zoomState = cam.cameraInfo.zoomState.value
+            val minZ = zoomState?.minZoomRatio ?: 1.0f
+            val maxZ = zoomState?.maxZoomRatio ?: 8.0f
+            val hardwareRatio = state.zoomRatio.coerceIn(minZ, maxZ)
+            cam.cameraControl.setZoomRatio(hardwareRatio)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -152,7 +175,8 @@ fun CameraViewfinder(
             .background(Color.Black)
             .pointerInput(Unit) {
                 detectTransformGestures { _, _, zoom, _ ->
-                    onZoomChange(state.zoomRatio * zoom)
+                    val newRatio = (state.zoomRatio * zoom).coerceIn(0.5f, 100.0f)
+                    onZoomChange(Math.round(newRatio * 10f) / 10f)
                 }
             },
         contentAlignment = Alignment.Center
@@ -175,6 +199,10 @@ fun CameraViewfinder(
                 .background(Color(0xFF0F1117))
         ) {
             if (hasCameraPermission) {
+                // Calculate extra digital magnification for preview if zoom exceeds camera hardware max
+                val hwMax = activeCamera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 8.0f
+                val digitalScale = if (state.zoomRatio > hwMax) (state.zoomRatio / hwMax).coerceAtMost(12.5f) else 1.0f
+
                 AndroidView(
                     factory = { ctx ->
                         PreviewView(ctx).apply {
@@ -193,6 +221,10 @@ fun CameraViewfinder(
                     },
                     modifier = Modifier
                         .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = digitalScale,
+                            scaleY = digitalScale
+                        )
                         .drawWithContent {
                             drawContent()
                             // Apply real-time live filter overlay over camera preview!
@@ -209,7 +241,7 @@ fun CameraViewfinder(
                         }
                 )
             } else {
-                // Fallback interactive synthetic viewfinder with live filter
+                // Fallback interactive synthetic viewfinder with live filter and 0.5x - 100x zoom rendering
                 Canvas(
                     modifier = Modifier.fillMaxSize()
                 ) {
@@ -217,7 +249,16 @@ fun CameraViewfinder(
                     val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
                         colorFilter = ColorMatrixColorFilter(filterMatrix)
                     }
-                    val srcRect = android.graphics.Rect(0, 0, sampleBitmap.width, sampleBitmap.height)
+
+                    val zoom = state.zoomRatio.coerceIn(0.5f, 100.0f)
+                    val cropW = (sampleBitmap.width / zoom).coerceIn(12f, sampleBitmap.width.toFloat())
+                    val cropH = (sampleBitmap.height / zoom).coerceIn(16f, sampleBitmap.height.toFloat())
+                    val left = ((sampleBitmap.width - cropW) / 2f).toInt().coerceAtLeast(0)
+                    val top = ((sampleBitmap.height - cropH) / 2f).toInt().coerceAtLeast(0)
+                    val right = (left + cropW.toInt()).coerceAtMost(sampleBitmap.width)
+                    val bottom = (top + cropH.toInt()).coerceAtMost(sampleBitmap.height)
+
+                    val srcRect = android.graphics.Rect(left, top, right, bottom)
                     val dstRect = android.graphics.RectF(0f, 0f, size.width, size.height)
                     drawContext.canvas.nativeCanvas.drawBitmap(sampleBitmap, srcRect, dstRect, paint)
                 }
@@ -235,6 +276,46 @@ fun CameraViewfinder(
                     isLevelStable = state.isLevelStable,
                     modifier = Modifier.fillMaxSize()
                 )
+            }
+
+            // Super Zoom Target Locator (Mini-PIP Overview Window for >= 15x Zoom)
+            if (state.zoomRatio >= 15f) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 48.dp, end = 12.dp)
+                        .size(width = 68.dp, height = 90.dp)
+                        .background(Color(0xDD000000), RoundedCornerShape(8.dp))
+                        .border(1.5.dp, Color(0xFFFFB300), RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(8.dp))
+                ) {
+                    Image(
+                        bitmap = sampleBitmap.asImageBitmap(),
+                        contentDescription = "Pemandangan Utuh Zoom",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .alpha(0.65f)
+                    )
+                    // Magnification target reticle box
+                    val reticleFraction = (1.0f / (state.zoomRatio / 4f)).coerceIn(0.12f, 0.55f)
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size((68 * reticleFraction).dp, (90 * reticleFraction).dp)
+                            .border(1.5.dp, Color(0xFFFFD600))
+                    )
+                    Text(
+                        text = "${state.zoomRatio.toInt()}x",
+                        color = Color(0xFFFFD600),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .background(Color(0xBB000000), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
             }
 
             // Low Light / Auto Night Mode Indicator Badge

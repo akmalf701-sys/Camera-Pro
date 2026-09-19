@@ -183,8 +183,9 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun setZoom(ratio: Float) {
+        val clamped = (Math.round(ratio * 10f) / 10f).coerceIn(0.5f, 100.0f)
         _cameraState.value = _cameraState.value.copy(
-            zoomRatio = ratio.coerceIn(1.0f, 8.0f)
+            zoomRatio = clamped
         )
     }
 

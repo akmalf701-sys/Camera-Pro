@@ -34,6 +34,7 @@ import com.example.ui.components.CloudSyncSheet
 import com.example.ui.components.ExportDialog
 import com.example.ui.components.FilterSelectorCarousel
 import com.example.ui.components.ProControlsPanel
+import com.example.ui.components.ZoomControlDeck
 
 @Composable
 fun MainCameraScreen(
@@ -206,6 +207,12 @@ fun MainCameraScreen(
                     onSetFocus = { viewModel.setFocusDistance(it) }
                 )
             }
+
+            // Zoom Control Deck (0.5x to 100x)
+            ZoomControlDeck(
+                currentZoom = cameraState.zoomRatio,
+                onZoomChange = { viewModel.setZoom(it) }
+            )
 
             // Bottom Shutter Deck
             CameraBottomDeck(
