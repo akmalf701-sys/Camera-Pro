@@ -71,6 +71,25 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
     private val _detailMedia = MutableStateFlow<MediaEntity?>(null)
     val detailMedia = _detailMedia.asStateFlow()
 
+    private val _quickPreviewMedia = MutableStateFlow<MediaEntity?>(null)
+    val quickPreviewMedia = _quickPreviewMedia.asStateFlow()
+
+    fun clearQuickPreview() {
+        _quickPreviewMedia.value = null
+    }
+
+    fun openQuickPreview(media: MediaEntity) {
+        _quickPreviewMedia.value = media
+        _detailMedia.value = media
+        setCameraMode(CameraMode.GALLERY)
+    }
+
+    fun toggleSuperSteady() {
+        _cameraState.value = _cameraState.value.copy(
+            isSuperSteadyActive = !_cameraState.value.isSuperSteadyActive
+        )
+    }
+
     private val _showCloudSheet = MutableStateFlow(false)
     val showCloudSheet = _showCloudSheet.asStateFlow()
 
@@ -85,11 +104,14 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
 
     private val sensorManager = StabilizerSensorManager(
         context = application,
-        onOrientationChanged = { roll, pitch, isSteady ->
+        onOrientationChanged = { roll, pitch, isSteady, shakeX, shakeY, stabilityScore ->
             _cameraState.value = _cameraState.value.copy(
                 rollAngle = roll,
                 pitchAngle = pitch,
-                isLevelStable = isSteady
+                isLevelStable = isSteady,
+                shakeOffsetX = if (_cameraState.value.isSuperSteadyActive) shakeX else 0f,
+                shakeOffsetY = if (_cameraState.value.isSuperSteadyActive) shakeY else 0f,
+                stabilityScorePercent = stabilityScore
             )
         },
         onLightChanged = { lux, isLowLight ->
@@ -132,7 +154,9 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
     fun setCameraMode(mode: CameraMode) {
         _cameraState.value = _cameraState.value.copy(
             currentMode = mode,
-            isProControlExpanded = mode == CameraMode.PRO
+            isProControlExpanded = mode == CameraMode.PRO,
+            isSuperSteadyActive = if (mode == CameraMode.VIDEO) true else _cameraState.value.isSuperSteadyActive,
+            isStabilizerEnabled = if (mode == CameraMode.VIDEO) true else _cameraState.value.isStabilizerEnabled
         )
     }
 
@@ -326,10 +350,12 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
                 captureProgress = 0f
             )
 
+            _quickPreviewMedia.value = saved
+
             // Open quick preview or notify
             Toast.makeText(
                 getApplication(),
-                if (isNight) "Foto Mode Malam Berhasil Ditangkap (Jernih & Tajam)!" else "Foto Tersimpan!",
+                if (isNight) "Foto Mode Malam Berhasil Ditangkap (Jernih & Tajam)!" else "Foto Tersimpan! Ketuk galeri untuk melihat.",
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -354,12 +380,13 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
             )
 
             viewModelScope.launch {
-                repository.saveCapturedVideo(
+                val savedVideo = repository.saveCapturedVideo(
                     durationSec = maxOf(1, elapsed),
                     isStabilized = _cameraState.value.isStabilizerEnabled,
                     resolutionText = _cameraState.value.videoQuality.resolutionText
                 )
-                Toast.makeText(getApplication(), "Video Berhasil Direkam & Disimpan!", Toast.LENGTH_SHORT).show()
+                _quickPreviewMedia.value = savedVideo
+                Toast.makeText(getApplication(), "Video Berhasil Direkam (Stabilisasi Super Steady Aktif)!", Toast.LENGTH_SHORT).show()
             }
         } else {
             // Start recording

@@ -203,6 +203,12 @@ fun CameraViewfinder(
                 val hwMax = activeCamera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 8.0f
                 val digitalScale = if (state.zoomRatio > hwMax) (state.zoomRatio / hwMax).coerceAtMost(12.5f) else 1.0f
 
+                val isSteadyActive = state.isSuperSteadyActive || (state.currentMode == CameraMode.VIDEO && state.isStabilizerEnabled)
+                val steadyScale = if (isSteadyActive) 1.08f else 1.0f
+                val dampX = if (isSteadyActive) -state.shakeOffsetX else 0f
+                val dampY = if (isSteadyActive) -state.shakeOffsetY else 0f
+                val dampRoll = if (isSteadyActive && state.currentMode == CameraMode.VIDEO) (-state.rollAngle * 0.25f).coerceIn(-4f, 4f) else 0f
+
                 AndroidView(
                     factory = { ctx ->
                         PreviewView(ctx).apply {
@@ -222,8 +228,11 @@ fun CameraViewfinder(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer(
-                            scaleX = digitalScale,
-                            scaleY = digitalScale
+                            scaleX = digitalScale * steadyScale,
+                            scaleY = digitalScale * steadyScale,
+                            translationX = dampX,
+                            translationY = dampY,
+                            rotationZ = dampRoll
                         )
                         .drawWithContent {
                             drawContent()
@@ -258,10 +267,23 @@ fun CameraViewfinder(
                     val right = (left + cropW.toInt()).coerceAtMost(sampleBitmap.width)
                     val bottom = (top + cropH.toInt()).coerceAtMost(sampleBitmap.height)
 
+                    val isSteadyActive = state.isSuperSteadyActive || (state.currentMode == CameraMode.VIDEO && state.isStabilizerEnabled)
+                    val dampX = if (isSteadyActive) -state.shakeOffsetX else 0f
+                    val dampY = if (isSteadyActive) -state.shakeOffsetY else 0f
+
                     val srcRect = android.graphics.Rect(left, top, right, bottom)
-                    val dstRect = android.graphics.RectF(0f, 0f, size.width, size.height)
+                    val dstRect = android.graphics.RectF(dampX, dampY, size.width + dampX, size.height + dampY)
                     drawContext.canvas.nativeCanvas.drawBitmap(sampleBitmap, srcRect, dstRect, paint)
                 }
+            }
+
+            // Red recording perimeter glow during active video recording
+            if (state.isRecordingVideo) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .border(3.dp, Color(0xCCE53935))
+                )
             }
 
             // Real-Time Grid Line Overlay
@@ -270,7 +292,7 @@ fun CameraViewfinder(
             }
 
             // Stabilizer Gyroscope / Horizon Level Overlay
-            if (state.isStabilizerEnabled) {
+            if (state.isStabilizerEnabled || state.isSuperSteadyActive) {
                 HorizonLevelOverlay(
                     rollAngle = state.rollAngle,
                     isLevelStable = state.isLevelStable,
@@ -353,16 +375,16 @@ fun CameraViewfinder(
                 }
             }
 
-            // Stabilizer Active Badge
-            if (state.isStabilizerEnabled) {
+            // Stabilizer / Super Steady Active Badge
+            if (state.isStabilizerEnabled || state.isSuperSteadyActive) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(12.dp)
-                        .background(Color(0xBB000000), RoundedCornerShape(20.dp))
+                        .background(Color(0xCC000000), RoundedCornerShape(20.dp))
                         .border(
                             1.dp,
-                            if (state.isLevelStable) Color(0xFF00E676) else Color(0x66FFFFFF),
+                            if (state.isLevelStable) Color(0xFF00E676) else Color(0xFF00E5FF),
                             RoundedCornerShape(20.dp)
                         )
                         .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -372,14 +394,20 @@ fun CameraViewfinder(
                         modifier = Modifier
                             .size(8.dp)
                             .clip(CircleShape)
-                            .background(if (state.isLevelStable) Color(0xFF00E676) else Color(0xFFFF9100))
+                            .background(if (state.isLevelStable) Color(0xFF00E676) else Color(0xFF00E5FF))
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (state.isLevelStable) "Stabilizer: Sejajar" else "Stabilizer: EIS Aktif",
+                        text = if (state.currentMode == CameraMode.VIDEO || state.isSuperSteadyActive) {
+                            "SUPER STEADY • ${state.stabilityScorePercent}% STABIL"
+                        } else if (state.isLevelStable) {
+                            "Stabilizer: Sejajar"
+                        } else {
+                            "Stabilizer: EIS Aktif"
+                        },
                         color = Color.White,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }

@@ -1,8 +1,14 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -65,36 +72,75 @@ fun CameraBottomDeck(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color.Black)
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color.Transparent,
+                        Color(0xBB000000),
+                        Color(0xF2090C11)
+                    )
+                )
+            )
             .navigationBarsPadding()
             .padding(bottom = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Mode Selector Row (FOTO, VIDEO, PRO, MALAM, GALERI)
-        Row(
+        // Modern Pill Mode Selector Row
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp)
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0x33000000))
+                .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(24.dp))
+                .padding(horizontal = 6.dp, vertical = 4.dp)
         ) {
-            CameraMode.entries.forEach { mode ->
-                val isSelected = state.currentMode == mode
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSelected) Color(0x33FFB300) else Color.Transparent)
-                        .clickable { onModeChange(mode) }
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
-                        .testTag("camera_mode_${mode.name.lowercase()}")
-                ) {
-                    Text(
-                        text = mode.displayName,
-                        color = if (isSelected) Color(0xFFFFCA28) else Color(0xFF90A4AE),
-                        fontSize = 13.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                    )
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CameraMode.entries.forEach { mode ->
+                    val isSelected = state.currentMode == mode
+                    val accentColor = when (mode) {
+                        CameraMode.PHOTO -> Color(0xFFFFB300)
+                        CameraMode.VIDEO -> Color(0xFFE53935)
+                        CameraMode.PRO -> Color(0xFF00E5FF)
+                        CameraMode.NIGHT -> Color(0xFFFFD54F)
+                        CameraMode.GALLERY -> Color(0xFFB388FF)
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(if (isSelected) accentColor.copy(alpha = 0.25f) else Color.Transparent)
+                            .border(
+                                width = if (isSelected) 1.dp else 0.dp,
+                                color = if (isSelected) accentColor else Color.Transparent,
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                            .clickable { onModeChange(mode) }
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                            .testTag("camera_mode_${mode.name.lowercase()}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isSelected && mode == CameraMode.VIDEO) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFE53935))
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+                            Text(
+                                text = mode.displayName,
+                                color = if (isSelected) accentColor else Color(0xFF90A4AE),
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -113,9 +159,9 @@ fun CameraBottomDeck(
             Box(
                 modifier = Modifier
                     .size(54.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(Color(0x33FFFFFF))
-                    .border(1.5.dp, Color(0x66FFFFFF), RoundedCornerShape(14.dp))
+                    .border(1.5.dp, Color(0x66FFFFFF), RoundedCornerShape(16.dp))
                     .clickable { onOpenGallery() }
                     .testTag("gallery_thumbnail_button"),
                 contentAlignment = Alignment.Center
@@ -137,7 +183,7 @@ fun CameraBottomDeck(
                 }
             }
 
-            // Quick Filter / Pro toggle
+            // Quick Filter / Pro toggle button
             IconButton(
                 onClick = {
                     if (state.currentMode == CameraMode.PRO) {
@@ -147,12 +193,19 @@ fun CameraBottomDeck(
                     }
                 },
                 modifier = Modifier
-                    .size(46.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
                     .background(
                         if (state.isFilterSelectorExpanded || state.isProControlExpanded)
                             Color(0x4400E5FF)
                         else Color(0x22FFFFFF)
+                    )
+                    .border(
+                        1.dp,
+                        if (state.isFilterSelectorExpanded || state.isProControlExpanded)
+                            Color(0xFF00E5FF)
+                        else Color(0x33FFFFFF),
+                        CircleShape
                     )
                     .testTag("toggle_effects_button")
             ) {
@@ -179,6 +232,7 @@ fun CameraBottomDeck(
                     .size(54.dp)
                     .clip(CircleShape)
                     .background(Color(0x22FFFFFF))
+                    .border(1.dp, Color(0x33FFFFFF), CircleShape)
                     .testTag("flip_camera_button")
             ) {
                 Icon(
@@ -202,10 +256,21 @@ fun ShutterButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (isPressed) 0.92f else 1.0f, label = "shutter_scale")
+    val scale by animateFloatAsState(if (isPressed) 0.90f else 1.0f, label = "shutter_scale")
+
+    val infiniteTransition = rememberInfiniteTransition(label = "recording_pulse")
+    val pulseBorderAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.5f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse_alpha"
+    )
 
     val outerRingColor = when {
-        mode == CameraMode.VIDEO -> Color(0xFFE53935)
+        mode == CameraMode.VIDEO -> if (isRecording) Color(0xFFE53935).copy(alpha = pulseBorderAlpha) else Color(0xFFE53935)
         mode == CameraMode.NIGHT -> Color(0xFFFFB300)
         mode == CameraMode.PRO -> Color(0xFF00E5FF)
         else -> Color.White
@@ -232,7 +297,7 @@ fun ShutterButton(
         }
 
         val innerSize by animateDpAsState(
-            targetValue = if (mode == CameraMode.VIDEO && isRecording) 30.dp else 60.dp,
+            targetValue = if (mode == CameraMode.VIDEO && isRecording) 32.dp else 60.dp,
             label = "shutter_inner_size"
         )
 

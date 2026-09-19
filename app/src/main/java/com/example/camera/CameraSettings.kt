@@ -74,5 +74,11 @@ data class CameraState(
     // Horizon / Level stabilization angles
     val pitchAngle: Float = 0.0f,
     val rollAngle: Float = 0.0f,
-    val isLevelStable: Boolean = true
+    val isLevelStable: Boolean = true,
+
+    // Anti-Shake EIS / Gyro counter-motion
+    val isSuperSteadyActive: Boolean = true,
+    val shakeOffsetX: Float = 0.0f,
+    val shakeOffsetY: Float = 0.0f,
+    val stabilityScorePercent: Int = 98
 )
