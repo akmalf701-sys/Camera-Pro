@@ -23,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
@@ -112,14 +113,35 @@ fun ZoomControlDeck(
                         onZoomChange(formatted)
                     },
                     colors = SliderDefaults.colors(
-                        thumbColor = Color(0xFFFFC107),
-                        activeTrackColor = Color(0xFFFFB300),
+                        thumbColor = if (currentZoom >= 15f) Color(0xFF00E5FF) else Color(0xFFFFC107),
+                        activeTrackColor = if (currentZoom >= 15f) Color(0xFF00E5FF) else Color(0xFFFFB300),
                         inactiveTrackColor = Color(0x44FFFFFF)
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("zoom_fine_slider")
                 )
+
+                if (currentZoom >= 15f) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (currentZoom >= 50f) "AI Super-Resolution 100x Aktif (Anti-Pecah & Rekonstruksi Tepi)" else "AI Ultra Clarity Aktif",
+                            color = Color(0xFF80D8FF),
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
         }
 

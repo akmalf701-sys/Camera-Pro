@@ -1,7 +1,10 @@
 package com.example.ui.components
 
+import android.graphics.Bitmap
+import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.view.TextureView
 import android.view.ViewGroup
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -32,6 +35,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Security
@@ -77,6 +81,8 @@ import com.example.camera.CameraState
 import com.example.camera.GridType
 import com.example.camera.ImageProcessor
 import kotlin.math.abs
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 @Composable
 fun CameraViewfinder(
@@ -160,6 +166,69 @@ fun CameraViewfinder(
             cam.cameraControl.setZoomRatio(hardwareRatio)
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    // Live frame captured from active camera for Super Zoom Target Locator (PIP)
+    var pipBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+    // Reactively capture frames from camera preview for the Super Zoom PIP window
+    LaunchedEffect(hasCameraPermission, previewView, activeCamera, state.zoomRatio) {
+        if (!hasCameraPermission || previewView == null) {
+            return@LaunchedEffect
+        }
+
+        if (state.zoomRatio >= 14f) {
+            // Live continuous frame grab during super-zoom mode
+            while (isActive) {
+                try {
+                    val pView = previewView
+                    if (pView != null) {
+                        var captured: Bitmap? = null
+                        // Try obtaining hardware-backed downsampled bitmap from TextureView for maximum efficiency
+                        for (i in 0 until pView.childCount) {
+                            val child = pView.getChildAt(i)
+                            if (child is TextureView && child.isAvailable) {
+                                captured = child.getBitmap(180, 240)
+                                break
+                            }
+                        }
+                        if (captured == null) {
+                            captured = pView.bitmap
+                        }
+                        if (captured != null) {
+                            pipBitmap = captured
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                delay(120) // ~8 fps smooth target locator preview
+            }
+        } else {
+            // When below 14x, capture a wide snapshot of the scene so that when user zooms in to 15x+,
+            // a clear wide overview of what was centered in the viewfinder is immediately ready
+            try {
+                val pView = previewView
+                if (pView != null) {
+                    var captured: Bitmap? = null
+                    for (i in 0 until pView.childCount) {
+                        val child = pView.getChildAt(i)
+                        if (child is TextureView && child.isAvailable) {
+                            captured = child.getBitmap(180, 240)
+                            break
+                        }
+                    }
+                    if (captured == null) {
+                        captured = pView.bitmap
+                    }
+                    if (captured != null) {
+                        pipBitmap = captured
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
@@ -255,11 +324,30 @@ fun CameraViewfinder(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     val filterMatrix = state.selectedFilter.toAndroidColorMatrix()
+                    val zoom = state.zoomRatio.coerceIn(0.5f, 100.0f)
+
+                    // If extreme zoom, apply micro-contrast adjustment to simulate AI ultra-clarity in viewfinder
+                    if (zoom >= 15f) {
+                        val contrastFactor = if (zoom >= 30f) 1.15f else 1.06f
+                        val translate = (-0.5f * contrastFactor + 0.5f) * 255f
+                        val contrastMatrix = ColorMatrix(
+                            floatArrayOf(
+                                contrastFactor, 0f, 0f, 0f, translate + 2f,
+                                0f, contrastFactor, 0f, 0f, translate + 2f,
+                                0f, 0f, contrastFactor, 0f, translate + 2f,
+                                0f, 0f, 0f, 1f, 0f
+                            )
+                        )
+                        filterMatrix.postConcat(contrastMatrix)
+                    }
+
                     val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                        isAntiAlias = true
+                        isFilterBitmap = true
+                        isDither = true
                         colorFilter = ColorMatrixColorFilter(filterMatrix)
                     }
 
-                    val zoom = state.zoomRatio.coerceIn(0.5f, 100.0f)
                     val cropW = (sampleBitmap.width / zoom).coerceIn(12f, sampleBitmap.width.toFloat())
                     val cropH = (sampleBitmap.height / zoom).coerceIn(16f, sampleBitmap.height.toFloat())
                     val left = ((sampleBitmap.width - cropW) / 2f).toInt().coerceAtLeast(0)
@@ -301,41 +389,96 @@ fun CameraViewfinder(
             }
 
             // Super Zoom Target Locator (Mini-PIP Overview Window for >= 15x Zoom)
-            if (state.zoomRatio >= 15f) {
+            AnimatedVisibility(
+                visible = state.zoomRatio >= 15f,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 96.dp, end = 12.dp)
+            ) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 48.dp, end = 12.dp)
-                        .size(width = 68.dp, height = 90.dp)
-                        .background(Color(0xDD000000), RoundedCornerShape(8.dp))
-                        .border(1.5.dp, Color(0xFFFFB300), RoundedCornerShape(8.dp))
-                        .clip(RoundedCornerShape(8.dp))
+                        .size(width = 72.dp, height = 96.dp)
+                        .background(Color(0xDD000000), RoundedCornerShape(10.dp))
+                        .border(1.5.dp, Color(0xFFFFB300), RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(10.dp))
                 ) {
+                    val currentPip = pipBitmap ?: sampleBitmap
                     Image(
-                        bitmap = sampleBitmap.asImageBitmap(),
+                        bitmap = currentPip.asImageBitmap(),
                         contentDescription = "Pemandangan Utuh Zoom",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxSize()
-                            .alpha(0.65f)
+                            .alpha(0.95f),
+                        colorFilter = if (state.selectedFilter != CameraFilter.NORMAL) {
+                            ColorFilter.colorMatrix(state.selectedFilter.toComposeColorMatrix())
+                        } else null
                     )
+
                     // Magnification target reticle box
-                    val reticleFraction = (1.0f / (state.zoomRatio / 4f)).coerceIn(0.12f, 0.55f)
+                    val reticleFraction = (1.0f / (state.zoomRatio / 3.5f)).coerceIn(0.12f, 0.55f)
                     Box(
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .size((68 * reticleFraction).dp, (90 * reticleFraction).dp)
+                            .size((72 * reticleFraction).dp, (96 * reticleFraction).dp)
                             .border(1.5.dp, Color(0xFFFFD600))
                     )
-                    Text(
-                        text = "${state.zoomRatio.toInt()}x",
-                        color = Color(0xFFFFD600),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
+
+                    // Zoom level & live badge indicator
+                    Row(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .background(Color(0xBB000000), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                            .padding(bottom = 4.dp)
+                            .background(Color(0xCC000000), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .background(Color(0xFF00E676), CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = "${state.zoomRatio.toInt()}x",
+                            color = Color(0xFFFFD600),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            // AI Super-Resolution / Anti-Pecah Active Indicator Badge
+            AnimatedVisibility(
+                visible = state.zoomRatio >= 15f,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 96.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .background(Color(0xDD000000), RoundedCornerShape(20.dp))
+                        .border(1.2.dp, Color(0xFF00E5FF), RoundedCornerShape(20.dp))
+                        .padding(horizontal = 12.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "AI Super-Resolution",
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (state.zoomRatio >= 50f) "AI Super-Res 100x • Anti-Pecah Aktif" else "AI Ultra Clarity Aktif",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
             }

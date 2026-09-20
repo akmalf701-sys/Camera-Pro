@@ -327,6 +327,14 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
                 rawBitmap
             }
 
+            val currentZoom = _cameraState.value.zoomRatio
+            if (currentZoom > 1.05f) {
+                processed = ImageProcessor.applySuperResolutionAndSharpening(
+                    source = processed,
+                    zoomRatio = currentZoom
+                )
+            }
+
             if (isNight) {
                 processed = ImageProcessor.processNightMode(processed)
             }
@@ -338,7 +346,7 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
 
             val saved = repository.saveCapturedPhoto(
                 bitmap = processed,
-                filterUsed = filter.name,
+                filterUsed = if (currentZoom >= 15f) "${filter.name} (AI ${currentZoom.toInt()}x)" else filter.name,
                 iso = isoInt,
                 shutterSpeed = speed,
                 isStabilized = _cameraState.value.isStabilizerEnabled,
@@ -352,10 +360,16 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
 
             _quickPreviewMedia.value = saved
 
-            // Open quick preview or notify
+            // Open quick preview or notify with intelligent messaging
+            val successMessage = when {
+                currentZoom >= 30f -> "AI Super Resolution ${currentZoom.toInt()}x Berhasil! Foto Jernih & Bebas Pecah."
+                currentZoom >= 15f -> "Foto Zoom ${currentZoom.toInt()}x Tersimpan dengan AI Ultra Clarity!"
+                isNight -> "Foto Mode Malam Berhasil Ditangkap (Jernih & Tajam)!"
+                else -> "Foto Tersimpan! Ketuk galeri untuk melihat."
+            }
             Toast.makeText(
                 getApplication(),
-                if (isNight) "Foto Mode Malam Berhasil Ditangkap (Jernih & Tajam)!" else "Foto Tersimpan! Ketuk galeri untuk melihat.",
+                successMessage,
                 Toast.LENGTH_SHORT
             ).show()
         }
