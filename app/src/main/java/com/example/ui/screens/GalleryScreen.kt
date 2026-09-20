@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import android.widget.VideoView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -82,6 +83,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.example.data.MediaEntity
@@ -353,20 +355,36 @@ fun FullscreenMediaViewer(
     var offset by remember(media.id) { mutableStateOf(Offset.Zero) }
     var showControls by remember { mutableStateOf(true) }
 
-    // Video Playback Simulation State
+    // Video Playback Engine & Native VideoView Integration
     val isVideo = media.mediaType == "VIDEO"
-    val totalSeconds = maxOf(1, media.durationSeconds)
-    var isPlaying by remember(media.id) { mutableStateOf(true) }
-    var currentSeconds by remember(media.id) { mutableIntStateOf(0) }
+    val videoFile = remember(media.filePath) { File(media.filePath) }
+    val thumbFile = remember(media.filePath) {
+        val f = File(media.filePath)
+        val thumbName = "THUMB_" + f.nameWithoutExtension.removePrefix("VID_") + ".jpg"
+        File(f.parentFile, thumbName)
+    }
 
-    LaunchedEffect(isPlaying, media.id) {
-        if (isVideo && isPlaying) {
-            while (isPlaying && currentSeconds < totalSeconds) {
-                delay(1000)
-                currentSeconds++
-                if (currentSeconds >= totalSeconds) {
-                    isPlaying = false
+    var totalSeconds by remember(media.id) { mutableIntStateOf(maxOf(1, media.durationSeconds)) }
+    var currentSeconds by remember(media.id) { mutableIntStateOf(0) }
+    var isPlaying by remember(media.id) { mutableStateOf(false) }
+    var isVideoReady by remember(media.id) { mutableStateOf(false) }
+    var videoViewRef by remember(media.id) { mutableStateOf<VideoView?>(null) }
+
+    // Synchronize video timeline position continuously while video is playing
+    LaunchedEffect(isPlaying, isVideoReady, media.id) {
+        if (isVideo) {
+            while (isPlaying) {
+                videoViewRef?.let { vv ->
+                    if (vv.isPlaying) {
+                        val posSec = (vv.currentPosition / 1000).coerceAtLeast(0)
+                        currentSeconds = posSec
+                        val durSec = (vv.duration / 1000).coerceAtLeast(1)
+                        if (durSec > 0) {
+                            totalSeconds = durSec
+                        }
+                    }
                 }
+                delay(250)
             }
         }
     }
@@ -380,8 +398,10 @@ fun FullscreenMediaViewer(
             .pointerInput(media.id) {
                 detectTapGestures(
                     onDoubleTap = {
-                        scale = if (scale > 1.2f) 1f else 2.5f
-                        offset = Offset.Zero
+                        if (!isVideo) {
+                            scale = if (scale > 1.2f) 1f else 2.5f
+                            offset = Offset.Zero
+                        }
                     },
                     onTap = {
                         showControls = !showControls
@@ -389,42 +409,68 @@ fun FullscreenMediaViewer(
                 )
             }
     ) {
-        // Main Visual Surface (Photo or Video)
+        // Main Visual Surface: Real Hardware-Accelerated Video Player or Photo Viewer
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(media.id) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        scale = (scale * zoom).coerceIn(1f, 5f)
-                        if (scale > 1f) {
-                            val maxOffset = 400f * (scale - 1f)
-                            offset = Offset(
-                                x = (offset.x + pan.x).coerceIn(-maxOffset, maxOffset),
-                                y = (offset.y + pan.y).coerceIn(-maxOffset, maxOffset)
-                            )
-                        } else {
-                            offset = Offset.Zero
+                    if (!isVideo) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            scale = (scale * zoom).coerceIn(1f, 5f)
+                            if (scale > 1f) {
+                                val maxOffset = 400f * (scale - 1f)
+                                offset = Offset(
+                                    x = (offset.x + pan.x).coerceIn(-maxOffset, maxOffset),
+                                    y = (offset.y + pan.y).coerceIn(-maxOffset, maxOffset)
+                                )
+                            } else {
+                                offset = Offset.Zero
+                            }
                         }
                     }
                 },
             contentAlignment = Alignment.Center
         ) {
-            AsyncImage(
-                model = File(media.filePath),
-                contentDescription = media.fileName,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = offset.x,
-                        translationY = offset.y
-                    )
-            )
-
-            // Video Play / Pause Overlay Center
             if (isVideo) {
+                // Background Poster / Thumbnail frame
+                AsyncImage(
+                    model = if (thumbFile.exists()) thumbFile else videoFile,
+                    contentDescription = media.fileName,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // Real Hardware-Accelerated Video Surface
+                if (videoFile.exists()) {
+                    AndroidView(
+                        factory = { ctx ->
+                            VideoView(ctx).apply {
+                                setVideoPath(videoFile.absolutePath)
+                                setOnPreparedListener { mp ->
+                                    isVideoReady = true
+                                    val durSec = (mp.duration / 1000).coerceAtLeast(1)
+                                    totalSeconds = durSec
+                                    mp.isLooping = false
+                                }
+                                setOnCompletionListener {
+                                    isPlaying = false
+                                    currentSeconds = totalSeconds
+                                }
+                                setOnErrorListener { _, _, _ ->
+                                    isVideoReady = false
+                                    true
+                                }
+                                videoViewRef = this
+                            }
+                        },
+                        update = { vv ->
+                            videoViewRef = vv
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
+                // Floating Center Video Play / Pause / Replay Button
                 AnimatedVisibility(
                     visible = showControls || !isPlaying,
                     enter = fadeIn(),
@@ -433,15 +479,25 @@ fun FullscreenMediaViewer(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(72.dp)
+                            .size(76.dp)
                             .clip(CircleShape)
-                            .background(Color(0x99000000))
-                            .border(1.5.dp, Color(0xFF00E5FF), CircleShape)
+                            .background(Color(0xCC0D1B2A))
+                            .border(2.dp, Color(0xFF00E5FF), CircleShape)
                             .clickable {
-                                if (currentSeconds >= totalSeconds) {
-                                    currentSeconds = 0
-                                    isPlaying = true
-                                } else {
+                                videoViewRef?.let { vv ->
+                                    if (currentSeconds >= totalSeconds) {
+                                        vv.seekTo(0)
+                                        vv.start()
+                                        isPlaying = true
+                                        currentSeconds = 0
+                                    } else if (vv.isPlaying) {
+                                        vv.pause()
+                                        isPlaying = false
+                                    } else {
+                                        vv.start()
+                                        isPlaying = true
+                                    }
+                                } ?: run {
                                     isPlaying = !isPlaying
                                 }
                             },
@@ -455,10 +511,25 @@ fun FullscreenMediaViewer(
                             },
                             contentDescription = "Putar / Jeda Video",
                             tint = Color(0xFF00E5FF),
-                            modifier = Modifier.size(38.dp)
+                            modifier = Modifier.size(42.dp)
                         )
                     }
                 }
+            } else {
+                // High Quality Photo Viewer with Smooth Pinch-to-Zoom
+                AsyncImage(
+                    model = File(media.filePath),
+                    contentDescription = media.fileName,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y
+                        )
+                )
             }
         }
 
@@ -637,8 +708,11 @@ fun FullscreenMediaViewer(
                             )
                         }
                         Slider(
-                            value = currentSeconds.toFloat(),
-                            onValueChange = { currentSeconds = it.toInt() },
+                            value = currentSeconds.toFloat().coerceIn(0f, totalSeconds.toFloat()),
+                            onValueChange = { newSec ->
+                                currentSeconds = newSec.toInt()
+                                videoViewRef?.seekTo(newSec.toInt() * 1000)
+                            },
                             valueRange = 0f..totalSeconds.toFloat(),
                             colors = SliderDefaults.colors(
                                 thumbColor = Color(0xFF00E5FF),
@@ -743,8 +817,19 @@ fun MediaGridCard(
     media: MediaEntity,
     onClick: () -> Unit
 ) {
+    val model = remember(media.filePath) {
+        if (media.mediaType == "VIDEO") {
+            val f = File(media.filePath)
+            val thumbName = "THUMB_" + f.nameWithoutExtension.removePrefix("VID_") + ".jpg"
+            val thumb = File(f.parentFile, thumbName)
+            if (thumb.exists()) thumb else f
+        } else {
+            File(media.filePath)
+        }
+    }
+
     Card(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF161B26)),
         modifier = Modifier
             .aspectRatio(1f)
@@ -752,7 +837,7 @@ fun MediaGridCard(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
-                model = File(media.filePath),
+                model = model,
                 contentDescription = media.fileName,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -770,13 +855,43 @@ fun MediaGridCard(
                         imageVector = Icons.Default.PlayCircle,
                         contentDescription = "Video",
                         tint = Color.White,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(34.dp)
                     )
                 }
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Text(
+                        text = "${media.durationSeconds}s",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .background(Color(0xCC000000), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                    )
+                    if (media.isStabilized) {
+                        Text(
+                            text = "OIS",
+                            color = Color(0xFF00E676),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .background(Color(0xCC000000), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            } else if (media.filterUsed != "NORMAL") {
+                // Filter badge for photos
+                val shortFilter = media.filterUsed.split(" ").firstOrNull() ?: media.filterUsed
                 Text(
-                    text = "${media.durationSeconds}s",
-                    color = Color.White,
-                    fontSize = 10.sp,
+                    text = shortFilter,
+                    color = Color(0xFF00E5FF),
+                    fontSize = 9.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier
                         .align(Alignment.BottomStart)
@@ -794,8 +909,8 @@ fun MediaGridCard(
                 tint = if (isSynced) Color(0xFF00E676) else Color(0xFFFFB300),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .size(14.dp)
+                    .padding(5.dp)
+                    .size(15.dp)
             )
         }
     }

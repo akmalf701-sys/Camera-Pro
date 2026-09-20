@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -167,11 +168,19 @@ fun CameraBottomDeck(
                 contentAlignment = Alignment.Center
             ) {
                 if (latestMedia != null && File(latestMedia.filePath).exists()) {
+                    val thumbModel = if (latestMedia.mediaType == "VIDEO") {
+                        val f = File(latestMedia.filePath)
+                        val thumbName = "THUMB_" + f.nameWithoutExtension.removePrefix("VID_") + ".jpg"
+                        val thumb = File(f.parentFile, thumbName)
+                        if (thumb.exists()) thumb else f
+                    } else {
+                        File(latestMedia.filePath)
+                    }
                     AsyncImage(
-                        model = File(latestMedia.filePath),
+                        model = thumbModel,
                         contentDescription = "Thumbnail Terakhir",
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxSize()
                     )
                 } else {
                     Icon(

@@ -329,9 +329,13 @@ class MainCameraViewModel(application: Application) : AndroidViewModel(applicati
 
             val currentZoom = _cameraState.value.zoomRatio
             if (currentZoom > 1.05f) {
+                val hwZoom = kotlin.math.min(currentZoom, 8.0f)
                 processed = ImageProcessor.applySuperResolutionAndSharpening(
                     source = processed,
-                    zoomRatio = currentZoom
+                    zoomRatio = currentZoom,
+                    targetWidth = processed.width,
+                    targetHeight = processed.height,
+                    hardwareZoomApplied = hwZoom
                 )
             }
 

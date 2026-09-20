@@ -300,15 +300,28 @@ object ImageProcessor {
     suspend fun applySuperResolutionAndSharpening(
         source: Bitmap,
         zoomRatio: Float,
-        targetWidth: Int = 1920,
-        targetHeight: Int = 1440
+        targetWidth: Int = source.width,
+        targetHeight: Int = source.height,
+        hardwareZoomApplied: Float = 1.0f
     ): Bitmap = withContext(Dispatchers.Default) {
-        if (zoomRatio <= 1.05f) return@withContext source
+        val effectiveZoom = (zoomRatio / hardwareZoomApplied.coerceAtLeast(1.0f)).coerceAtLeast(1.0f)
+        if (effectiveZoom <= 1.04f) return@withContext source
 
-        // 1. Precise Center Crop based on Zoom Ratio
-        val zoom = zoomRatio.coerceIn(1.0f, 100.0f)
-        val cropW = (source.width / zoom).toInt().coerceIn(16, source.width)
-        val cropH = (source.height / zoom).toInt().coerceIn(16, source.height)
+        // 1. Maintain precise target aspect ratio matching framing
+        val targetAspect = targetWidth.toFloat() / targetHeight.toFloat()
+        val sourceAspect = source.width.toFloat() / source.height.toFloat()
+
+        var cropW: Int
+        var cropH: Int
+
+        if (sourceAspect > targetAspect) {
+            cropH = (source.height / effectiveZoom).toInt().coerceIn(32, source.height)
+            cropW = (cropH * targetAspect).toInt().coerceIn(32, source.width)
+        } else {
+            cropW = (source.width / effectiveZoom).toInt().coerceIn(32, source.width)
+            cropH = (cropW / targetAspect).toInt().coerceIn(32, source.height)
+        }
+
         val cropX = ((source.width - cropW) / 2).coerceIn(0, source.width - cropW)
         val cropY = ((source.height - cropH) / 2).coerceIn(0, source.height - cropH)
 
@@ -319,13 +332,15 @@ object ImageProcessor {
         var curW = cropW
         var curH = cropH
 
-        // Staged doubling up to target size for smooth interpolation
-        while (curW * 2 < targetWidth && curH * 2 < targetHeight) {
-            curW *= 2
-            curH *= 2
+        // Staged progressive doubling up to target size for smooth interpolation
+        while (curW * 1.8f < targetWidth && curH * 1.8f < targetHeight) {
+            curW = (curW * 1.8f).toInt()
+            curH = (curH * 1.8f).toInt()
             val nextStep = Bitmap.createBitmap(curW, curH, Bitmap.Config.ARGB_8888)
             val stepCanvas = Canvas(nextStep)
-            val stepPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            val stepPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                isDither = true
+            }
             stepCanvas.drawBitmap(
                 currentBitmap,
                 Rect(0, 0, currentBitmap.width, currentBitmap.height),
@@ -341,7 +356,9 @@ object ImageProcessor {
         // Final upscale to target canvas
         val finalUpscaled = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
         val finalCanvas = Canvas(finalUpscaled)
-        val finalPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val finalPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            isDither = true
+        }
         finalCanvas.drawBitmap(
             currentBitmap,
             Rect(0, 0, currentBitmap.width, currentBitmap.height),
@@ -354,27 +371,25 @@ object ImageProcessor {
         cropped.recycle()
 
         // 3. AI Edge Enhancement / Unsharp Masking Kernel
-        // Strength adapts to zoom level: higher zoom receives stronger edge definition
         val sharpenStrength = when {
-            zoom >= 50f -> 0.70f
-            zoom >= 25f -> 0.50f
-            zoom >= 10f -> 0.35f
-            else -> 0.20f
+            zoomRatio >= 75f -> 0.65f
+            zoomRatio >= 30f -> 0.48f
+            zoomRatio >= 15f -> 0.35f
+            else -> 0.22f
         }
         val sharpened = applyConvolutionSharpen(finalUpscaled, sharpenStrength)
         finalUpscaled.recycle()
 
         // 4. Micro-Contrast & De-Haze Restoration
-        // Extreme digital zoom tends to look washed out/foggy; this restores crisp vibrant depth
         val enhanced = Bitmap.createBitmap(sharpened.width, sharpened.height, Bitmap.Config.ARGB_8888)
         val enhCanvas = Canvas(enhanced)
-        val contrastFactor = if (zoom >= 30f) 1.15f else 1.06f
+        val contrastFactor = if (zoomRatio >= 30f) 1.14f else 1.05f
         val translate = (-0.5f * contrastFactor + 0.5f) * 255f
         val colorMatrix = ColorMatrix(
             floatArrayOf(
-                contrastFactor, 0f, 0f, 0f, translate + 3f,
-                0f, contrastFactor, 0f, 0f, translate + 3f,
-                0f, 0f, contrastFactor, 0f, translate + 3f,
+                contrastFactor, 0f, 0f, 0f, translate + 2f,
+                0f, contrastFactor, 0f, 0f, translate + 2f,
+                0f, 0f, contrastFactor, 0f, translate + 2f,
                 0f, 0f, 0f, 1f, 0f
             )
         )
@@ -446,64 +461,151 @@ object ImageProcessor {
     }
 
     /**
-     * Creates a synthetic camera scene bitmap (useful as realistic camera simulation if running in emulator).
+     * Creates a high-fidelity synthetic camera scene bitmap with rich architectural and natural detail
+     * centered on an ultra-zoom target (clock tower, signboards, textures) to ensure high-zoom 30x-100x testing
+     * renders crystal-clear objects with no pixelation or blank areas.
      */
     fun createSampleSceneBitmap(width: Int = 1080, height: Int = 1440): Bitmap {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
-        // Gradient sky
+        // 1. Twilight sky gradient
         val skyShader = android.graphics.LinearGradient(
-            0f, 0f, 0f, height * 0.65f,
-            intArrayOf(0xFF192A56.toInt(), 0xFF4A69BD.toInt(), 0xFFE58E26.toInt(), 0xFFF8C291.toInt()),
-            floatArrayOf(0f, 0.4f, 0.75f, 1f),
+            0f, 0f, 0f, height * 0.70f,
+            intArrayOf(0xFF0D1B2A.toInt(), 0xFF1B263B.toInt(), 0xFF415A77.toInt(), 0xFFE0A96D.toInt()),
+            floatArrayOf(0f, 0.35f, 0.70f, 1f),
             Shader.TileMode.CLAMP
         )
         val skyPaint = Paint().apply { shader = skyShader }
-        canvas.drawRect(0f, 0f, width.toFloat(), height * 0.65f, skyPaint)
+        canvas.drawRect(0f, 0f, width.toFloat(), height * 0.70f, skyPaint)
 
-        // Sun / glowing disc
-        val sunPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFFEEAA7.toInt()
-            setShadowLayer(40f, 0f, 0f, 0xFFF39C12.toInt())
+        // 2. High-zoom center target: Moon & Stars in upper center
+        val moonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFFFFBEA.toInt()
+            setShadowLayer(45f, 0f, 0f, 0xFFFFE082.toInt())
         }
-        canvas.drawCircle(width * 0.72f, height * 0.38f, 65f, sunPaint)
+        canvas.drawCircle(width * 0.50f, height * 0.28f, 54f, moonPaint)
 
-        // Mountain silhouettes
+        // Craters on the moon for fine telescopic detail
+        val craterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFE0DAC0.toInt()
+        }
+        canvas.drawCircle(width * 0.48f, height * 0.26f, 12f, craterPaint)
+        canvas.drawCircle(width * 0.52f, height * 0.29f, 8f, craterPaint)
+        canvas.drawCircle(width * 0.49f, height * 0.30f, 6f, craterPaint)
+
+        // Stars
+        val starPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+        }
+        val starPositions = arrayOf(
+            Pair(0.15f, 0.12f), Pair(0.28f, 0.18f), Pair(0.38f, 0.08f),
+            Pair(0.65f, 0.14f), Pair(0.78f, 0.09f), Pair(0.88f, 0.22f)
+        )
+        for (st in starPositions) {
+            canvas.drawCircle(width * st.first, height * st.second, 3f, starPaint)
+        }
+
+        // 3. Mountain range in background
         val mountainPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF2C3E50.toInt()
+            color = 0xFF243447.toInt()
         }
-        val path1 = android.graphics.Path().apply {
-            moveTo(0f, height * 0.65f)
-            lineTo(width * 0.25f, height * 0.45f)
-            lineTo(width * 0.55f, height * 0.65f)
-            lineTo(width.toFloat(), height * 0.5f)
+        val pathMt = android.graphics.Path().apply {
+            moveTo(0f, height * 0.58f)
+            lineTo(width * 0.20f, height * 0.44f)
+            lineTo(width * 0.45f, height * 0.52f)
+            lineTo(width * 0.75f, height * 0.42f)
+            lineTo(width.toFloat(), height * 0.54f)
             lineTo(width.toFloat(), height.toFloat())
             lineTo(0f, height.toFloat())
             close()
         }
-        canvas.drawPath(path1, mountainPaint)
+        canvas.drawPath(pathMt, mountainPaint)
 
-        // Dark foreground hills & trees
-        val fgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF1E272C.toInt()
+        // 4. Center Landmark: Architectural Heritage Clock Tower (Directly in the 100x zoom reticle!)
+        val towerLeft = width * 0.40f
+        val towerRight = width * 0.60f
+        val towerTop = height * 0.38f
+        val towerBottom = height * 0.82f
+
+        val buildingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF3D4E5E.toInt()
         }
-        val path2 = android.graphics.Path().apply {
-            moveTo(0f, height * 0.62f)
-            lineTo(width * 0.35f, height * 0.58f)
-            lineTo(width * 0.7f, height * 0.64f)
-            lineTo(width.toFloat(), height * 0.60f)
-            lineTo(width.toFloat(), height.toFloat())
-            lineTo(0f, height.toFloat())
+        canvas.drawRect(towerLeft, towerTop, towerRight, towerBottom, buildingPaint)
+
+        // Tower spire / roof
+        val roofPath = android.graphics.Path().apply {
+            moveTo(towerLeft - 10f, towerTop)
+            lineTo(width * 0.50f, towerTop - (height * 0.09f))
+            lineTo(towerRight + 10f, towerTop)
             close()
         }
-        canvas.drawPath(path2, fgPaint)
+        val roofPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1F2937.toInt() }
+        canvas.drawPath(roofPath, roofPaint)
 
-        // Lake reflection in foreground
-        val waterPaint = Paint().apply {
-            color = 0xFF14202B.toInt()
+        // Clock Face right in the center (Perfection for 30x - 100x zoom test!)
+        val clockCenterY = towerTop + (height * 0.08f)
+        val clockRadius = (towerRight - towerLeft) * 0.32f
+
+        val clockFacePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFF3E5AB.toInt()
+            setShadowLayer(8f, 0f, 0f, Color.BLACK)
         }
-        canvas.drawRect(0f, height * 0.72f, width.toFloat(), height.toFloat(), waterPaint)
+        canvas.drawCircle(width * 0.50f, clockCenterY, clockRadius, clockFacePaint)
+
+        // Clock border ring
+        val clockRimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFC5A059.toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = 6f
+        }
+        canvas.drawCircle(width * 0.50f, clockCenterY, clockRadius, clockRimPaint)
+
+        // Clock Hands
+        val clockHandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF1B1B1B.toInt()
+            strokeWidth = 4.5f
+            strokeCap = Paint.Cap.ROUND
+        }
+        canvas.drawLine(width * 0.50f, clockCenterY, width * 0.50f, clockCenterY - clockRadius * 0.65f, clockHandPaint)
+        canvas.drawLine(width * 0.50f, clockCenterY, width * 0.50f + clockRadius * 0.50f, clockCenterY, clockHandPaint)
+
+        // Target Inscription Text on Tower Face (Readable at extreme zoom)
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 22f
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+            setShadowLayer(4f, 1f, 1f, Color.BLACK)
+        }
+        canvas.drawText("ULTRA 100X SPACE ZOOM", width * 0.50f, towerTop + (height * 0.18f), textPaint)
+        textPaint.textSize = 17f
+        textPaint.color = 0xFF00E5FF.toInt()
+        canvas.drawText("AI OPTICAL ENHANCER • HIGH CLARITY", width * 0.50f, towerTop + (height * 0.21f), textPaint)
+
+        // Windows on tower
+        val winPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFD54F.toInt() }
+        for (row in 0..2) {
+            val winY = towerTop + (height * 0.24f) + (row * 40f)
+            canvas.drawRoundRect(width * 0.44f, winY, width * 0.47f, winY + 26f, 6f, 6f, winPaint)
+            canvas.drawRoundRect(width * 0.53f, winY, width * 0.56f, winY + 26f, 6f, 6f, winPaint)
+        }
+
+        // 5. Lake & foreground reflection
+        val waterShader = android.graphics.LinearGradient(
+            0f, height * 0.78f, 0f, height.toFloat(),
+            intArrayOf(0xFF101B2B.toInt(), 0xFF080D14.toInt()),
+            null,
+            Shader.TileMode.CLAMP
+        )
+        val waterPaint = Paint().apply { shader = waterShader }
+        canvas.drawRect(0f, height * 0.78f, width.toFloat(), height.toFloat(), waterPaint)
+
+        // Reflection of clock tower light in the water
+        val reflectPaint = Paint().apply {
+            color = 0x33FFD54F.toInt()
+        }
+        canvas.drawRect(width * 0.44f, height * 0.80f, width * 0.56f, height * 0.94f, reflectPaint)
 
         return bitmap
     }

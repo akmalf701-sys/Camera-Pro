@@ -257,8 +257,16 @@ fun MainCameraScreen(
                                     .size(36.dp)
                                     .clip(RoundedCornerShape(8.dp))
                             ) {
+                                val previewModel = if (media.mediaType == "VIDEO") {
+                                    val f = File(media.filePath)
+                                    val thumbName = "THUMB_" + f.nameWithoutExtension.removePrefix("VID_") + ".jpg"
+                                    val thumb = File(f.parentFile, thumbName)
+                                    if (thumb.exists()) thumb else f
+                                } else {
+                                    File(media.filePath)
+                                }
                                 AsyncImage(
-                                    model = File(media.filePath),
+                                    model = previewModel,
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()

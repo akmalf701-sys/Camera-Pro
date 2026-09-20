@@ -7,6 +7,7 @@ import android.net.Uri
 import com.example.camera.ExportProfile
 import com.example.camera.ImageProcessor
 import com.example.camera.PhotoEditAdjustments
+import com.example.camera.VideoEncoderHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -96,29 +97,42 @@ class MediaRepository(
     suspend fun saveCapturedVideo(
         durationSec: Int,
         isStabilized: Boolean,
-        resolutionText: String
+        resolutionText: String,
+        sourceFrame: Bitmap? = null
     ): MediaEntity = withContext(Dispatchers.IO) {
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val fileName = "VID_${timeStamp}.mp4"
-        val file = File(mediaDir, fileName)
+        val videoFile = File(mediaDir, fileName)
 
-        // Create representative video placeholder thumbnail/file
-        val sampleThumb = ImageProcessor.createSampleSceneBitmap(1920, 1080)
+        // Base scene for video frames
+        val baseBitmap = sourceFrame ?: ImageProcessor.createSampleSceneBitmap(1280, 720)
+
+        // Save companion thumbnail file for instant gallery grid loading
         val thumbFile = File(mediaDir, "THUMB_${timeStamp}.jpg")
         FileOutputStream(thumbFile).use { out ->
-            sampleThumb.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            baseBitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
         }
-        // Write mock video header bytes to file
-        file.writeBytes(ByteArray(minOf(1024 * 512 * maxOf(1, durationSec), 5 * 1024 * 1024)))
+
+        // Generate genuine playable MP4 file using H.264 MediaCodec/MediaMuxer
+        val success = VideoEncoderHelper.createMp4Video(
+            outputFile = videoFile,
+            baseBitmap = baseBitmap,
+            durationSeconds = maxOf(2, durationSec),
+            fps = 30,
+            isStabilized = isStabilized
+        )
+
+        val finalFilePath = if (success && videoFile.exists()) videoFile.absolutePath else thumbFile.absolutePath
+        val finalFileSize = if (videoFile.exists()) videoFile.length() else thumbFile.length()
 
         val entity = MediaEntity(
-            filePath = thumbFile.absolutePath,
+            filePath = finalFilePath,
             fileName = fileName,
             mediaType = "VIDEO",
             timestamp = System.currentTimeMillis(),
-            fileSize = file.length(),
-            width = 1920,
-            height = 1080,
+            fileSize = finalFileSize,
+            width = 1280,
+            height = 720,
             filterUsed = "NORMAL",
             iso = 400,
             shutterSpeed = "1/60s",
@@ -126,7 +140,7 @@ class MediaRepository(
             isNightMode = false,
             cloudSyncStatus = "PENDING",
             cloudSyncTimestamp = 0L,
-            durationSeconds = durationSec
+            durationSeconds = maxOf(1, durationSec)
         )
 
         val id = mediaDao.insertMedia(entity)
